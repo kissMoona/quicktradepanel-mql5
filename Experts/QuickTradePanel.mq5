@@ -5,7 +5,7 @@
 //+------------------------------------------------------------------+
 #property copyright "Author: 猪猪大番薯"
 #property link      "https://github.com/kissMoona/quicktradepanel-mql5"
-#property version   "1.17"
+#property version   "1.18"
 #property description "作者：猪猪大番薯"
 #property description "这个面板搭配一些奇妙的指标食用，效果更佳"
 
@@ -350,6 +350,7 @@ private:
 
    //---
    double            NormLots(double lots);
+   double            ResolveWorkingLots(const double fallbackLots = 0.0, const bool syncDisplay = true);
    void              UpdateLotsDisplay();
    ENUM_ORDER_TYPE_FILLING DetectFilling();
    void              AsyncCloseByType(ENUM_POSITION_TYPE type);
@@ -1119,8 +1120,7 @@ bool CQuickTradePanel::ExecuteMarketOrder(const ENUM_POSITION_TYPE posType,
 //+------------------------------------------------------------------+
 void CQuickTradePanel::OnClickBuy()
   {
-   m_lots = NormLots(StringToDouble(m_edtLots.Text()));
-   UpdateLotsDisplay();
+   m_lots = ResolveWorkingLots();
    ExecuteMarketOrder(POSITION_TYPE_BUY, m_lots, "QuickPanel Buy", true);
   }
 
@@ -1129,8 +1129,7 @@ void CQuickTradePanel::OnClickBuy()
 //+------------------------------------------------------------------+
 void CQuickTradePanel::OnClickSell()
   {
-   m_lots = NormLots(StringToDouble(m_edtLots.Text()));
-   UpdateLotsDisplay();
+   m_lots = ResolveWorkingLots();
    ExecuteMarketOrder(POSITION_TYPE_SELL, m_lots, "QuickPanel Sell", true);
   }
 
@@ -1244,7 +1243,8 @@ void CQuickTradePanel::AsyncCloseByType(ENUM_POSITION_TYPE type)
 void CQuickTradePanel::OnClickLotsPlus()
   {
    SoundClick();
-   m_lots = NormLots(StringToDouble(m_edtLots.Text()) + InpLotsStep);
+   double currentLots = ResolveWorkingLots(0.0, false);
+   m_lots = NormLots(currentLots + InpLotsStep);
    UpdateLotsDisplay();
   }
 
@@ -1254,7 +1254,8 @@ void CQuickTradePanel::OnClickLotsPlus()
 void CQuickTradePanel::OnClickLotsMinus()
   {
    SoundClick();
-   m_lots = NormLots(StringToDouble(m_edtLots.Text()) - InpLotsStep);
+   double currentLots = ResolveWorkingLots(0.0, false);
+   m_lots = NormLots(currentLots - InpLotsStep);
    UpdateLotsDisplay();
   }
 
@@ -1264,7 +1265,8 @@ void CQuickTradePanel::OnClickLotsMinus()
 void CQuickTradePanel::OnClickLotsX2()
   {
    SoundClick();
-   m_lots = NormLots(StringToDouble(m_edtLots.Text()) * 2.0);
+   double currentLots = ResolveWorkingLots(0.0, false);
+   m_lots = NormLots(currentLots * 2.0);
    UpdateLotsDisplay();
   }
 
@@ -1274,7 +1276,8 @@ void CQuickTradePanel::OnClickLotsX2()
 void CQuickTradePanel::OnClickLotsD2()
   {
    SoundClick();
-   m_lots = NormLots(StringToDouble(m_edtLots.Text()) / 2.0);
+   double currentLots = ResolveWorkingLots(0.0, false);
+   m_lots = NormLots(currentLots / 2.0);
    UpdateLotsDisplay();
   }
 
@@ -1786,11 +1789,49 @@ double CQuickTradePanel::NormLots(double lots)
    double maxLot  = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX);
    double lotStep = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
 
-   if(lotStep > 0)
-      lots = MathFloor(lots / lotStep) * lotStep;
+   if(lotStep <= 0.0)
+      lotStep = 0.01;
+   if(minLot <= 0.0)
+      minLot = lotStep;
+   if(maxLot < minLot)
+      maxLot = minLot;
 
    lots = MathMax(minLot, MathMin(maxLot, lots));
-   return NormalizeDouble(lots, 2);
+
+   double steps = MathRound((lots - minLot) / lotStep);
+   lots = minLot + steps * lotStep;
+   lots = MathMax(minLot, MathMin(maxLot, lots));
+
+   int lotDigits = 2;
+   if(lotStep > 0.0)
+      lotDigits = (int)MathRound(-MathLog10(lotStep));
+   lotDigits = (int)MathMax(0, MathMin(8, lotDigits));
+
+   return NormalizeDouble(lots, lotDigits);
+  }
+
+//+------------------------------------------------------------------+
+//| 从面板输入框同步当前工作手数                                      |
+//+------------------------------------------------------------------+
+double CQuickTradePanel::ResolveWorkingLots(const double fallbackLots, const bool syncDisplay)
+  {
+   double parsedLots = StringToDouble(m_edtLots.Text());
+   if(parsedLots <= 0.0)
+     {
+      if(m_lots > 0.0)
+         parsedLots = m_lots;
+      else
+         if(fallbackLots > 0.0)
+            parsedLots = fallbackLots;
+         else
+            parsedLots = InpDefaultLots;
+     }
+
+   m_lots = NormLots(parsedLots);
+   if(syncDisplay)
+      UpdateLotsDisplay();
+
+   return m_lots;
   }
 
 //+------------------------------------------------------------------+
@@ -1798,7 +1839,12 @@ double CQuickTradePanel::NormLots(double lots)
 //+------------------------------------------------------------------+
 void CQuickTradePanel::UpdateLotsDisplay()
   {
-   m_edtLots.Text(DoubleToString(m_lots, 2));
+   double lotStep = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
+   int lotDigits = 2;
+   if(lotStep > 0.0)
+      lotDigits = (int)MathRound(-MathLog10(lotStep));
+   lotDigits = (int)MathMax(0, MathMin(8, lotDigits));
+   m_edtLots.Text(DoubleToString(m_lots, lotDigits));
   }
 
 //+------------------------------------------------------------------+
@@ -2311,7 +2357,7 @@ double CQuickTradePanel::ComputeNextFloatAddTrigger(const ENUM_POSITION_TYPE pos
 //+------------------------------------------------------------------+
 bool CQuickTradePanel::SendFloatProfitAddOrder(const ENUM_POSITION_TYPE posType)
   {
-   double addLots = NormLots(InpFloatProfitAddLots);
+   double addLots = ResolveWorkingLots(InpFloatProfitAddLots);
    if(addLots <= 0.0)
       return false;
    string comment = (posType == POSITION_TYPE_BUY ? "QTP FloatAdd Buy" : "QTP FloatAdd Sell");
@@ -3070,6 +3116,13 @@ void CQuickTradePanel::ProcessArrowSignalAutoTrading()
       return;
      }
 
+   if(!TerminalInfoInteger(TERMINAL_CONNECTED))
+      return;
+
+   MqlTick currentTick;
+   if(!SymbolInfoTick(_Symbol, currentTick) || currentTick.ask <= 0.0 || currentTick.bid <= 0.0)
+      return;
+
    ENUM_POSITION_TYPE posType = POSITION_TYPE_BUY;
    string signalKey = "";
    string objectName = "";
@@ -3083,17 +3136,30 @@ void CQuickTradePanel::ProcessArrowSignalAutoTrading()
       return;
 
    bool singleOrderMode = !m_autoFloatProfitAdd; // 浮盈加仓关闭时：箭头模式按“一次一单”执行
+   bool hasExistingExposure = HasManagedExposureForArrow();
+
+   if(m_arrowSignalPrimed && m_lastArrowSignalKey == "" && !m_arrowPendingReentry &&
+      m_asyncPending <= 0 && hasExistingExposure)
+     {
+      m_lastArrowSignalKey = signalKey;
+      Print("[Panel] 已有持仓，当前箭头信号仅作为基线接管，不立即重开仓 | Side:",
+            (posType == POSITION_TYPE_BUY ? "BUY" : "SELL"),
+            " | Object:", objectName,
+            " | Time:", TimeToString(signalTime, TIME_DATE|TIME_SECONDS),
+            " | ", filterState);
+      return;
+     }
 
     if(!m_arrowSignalPrimed)
     {
        m_arrowSignalPrimed = true;
        bool markSignalHandled = !InpArrowTradeOnLatestSignalAtLoad;
 
-       m_lots = NormLots(StringToDouble(m_edtLots.Text()));
-       UpdateLotsDisplay();
+       m_lots = ResolveWorkingLots();
 
        bool sentOnLoad = false;
-       bool hasExistingExposure = HasManagedExposureForArrow();
+       if(hasExistingExposure)
+          markSignalHandled = true;
 
        if(InpArrowTradeOnLatestSignalAtLoad && m_asyncPending <= 0 && !hasExistingExposure)
        {
@@ -3117,7 +3183,7 @@ void CQuickTradePanel::ProcessArrowSignalAutoTrading()
 
        Print("[Panel] 箭头指标自动开单已就绪 | 最新信号对象:", objectName,
              " | Time:", TimeToString(signalTime, TIME_DATE|TIME_SECONDS),
-            " | LoadTrade:", (InpArrowTradeOnLatestSignalAtLoad ? (sentOnLoad ? "ON-SENT" : (hasExistingExposure ? "ON-BLOCKED-BY-EXPOSURE" : "ON-SKIP")) : "OFF"),
+            " | LoadTrade:", (InpArrowTradeOnLatestSignalAtLoad ? (sentOnLoad ? "ON-SENT" : (hasExistingExposure ? "ON-PRIMED-BY-EXPOSURE" : "ON-SKIP")) : "OFF"),
             " | ", filterState,
             " | Debug:", m_lastArrowSignalDebug);
       return;
@@ -3156,8 +3222,7 @@ void CQuickTradePanel::ProcessArrowSignalAutoTrading()
          return;
         }
 
-      m_lots = NormLots(StringToDouble(m_edtLots.Text()));
-      UpdateLotsDisplay();
+      m_lots = ResolveWorkingLots();
 
       string pendingComment = (m_arrowPendingPosType == POSITION_TYPE_BUY ? "QTP Arrow Buy" : "QTP Arrow Sell");
       bool sentPending = ExecuteMarketOrder(m_arrowPendingPosType, m_lots, pendingComment, false);
@@ -3208,8 +3273,7 @@ void CQuickTradePanel::ProcessArrowSignalAutoTrading()
          return;
         }
 
-      m_lots = NormLots(StringToDouble(m_edtLots.Text()));
-      UpdateLotsDisplay();
+      m_lots = ResolveWorkingLots();
 
       string singleComment = (posType == POSITION_TYPE_BUY ? "QTP Arrow Buy" : "QTP Arrow Sell");
       bool sentSingle = ExecuteMarketOrder(posType, m_lots, singleComment, false);
@@ -3238,8 +3302,7 @@ void CQuickTradePanel::ProcessArrowSignalAutoTrading()
    if(m_asyncPending > 0)
       return;
 
-   m_lots = NormLots(StringToDouble(m_edtLots.Text()));
-   UpdateLotsDisplay();
+   m_lots = ResolveWorkingLots();
 
    string comment = (posType == POSITION_TYPE_BUY ? "QTP Arrow Buy" : "QTP Arrow Sell");
    bool sent = ExecuteMarketOrder(posType, m_lots, comment, false);
@@ -3625,9 +3688,10 @@ void CQuickTradePanel::UpdateFloatAddConfigLabel()
    if(!m_lblFloatAddCfg.IsVisible())
       return;
 
+   double linkedLots = ResolveWorkingLots((InpFloatProfitAddLots > 0.0 ? InpFloatProfitAddLots : InpDefaultLots), false);
    string text = StringFormat("每间距 %.2f 价格  +%.2f 手",
                               MathMax(0.01, InpFloatProfitStepMoney),
-                              NormLots(InpFloatProfitAddLots));
+                              linkedLots);
    if(m_autoFloatProfitAdd)
       text += StringFormat("  |  BUY@%s  SELL@%s",
                            (m_nextFloatAddBuyProfit > 0.0 ? DoubleToString(m_nextFloatAddBuyProfit, _Digits) : "--"),
